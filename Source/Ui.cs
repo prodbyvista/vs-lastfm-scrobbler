@@ -829,6 +829,10 @@ namespace ITunesScrobbler
             KeyValue("all-time", "loading...", Theme.Hi, out allTime);
             KeyValue("made by", "Vista, 2026", Theme.Hi, out dummy);
 
+            Section("what's new in v" + Program.Version);
+            foreach (var line in PatchNotes.Lines) Note("+ " + line, Theme.Text, Font, 0);
+            Link("> all versions and notes on github", Updater.RepoUrl + "/releases", 0, true);
+
             Section("links");
             Link("> your last.fm profile", st.UserName != "" ? "https://www.last.fm/user/" + Uri.EscapeDataString(st.UserName) : "https://www.last.fm", 0, false);
             Link("> app folder", Settings.AppDir, 0, false);

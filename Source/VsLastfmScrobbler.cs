@@ -49,6 +49,7 @@ namespace ITunesScrobbler
         public bool VerboseLog = false;       // log every routine event, for troubleshooting
         public bool CheckUpdates = true;      // look for new versions on GitHub
         public string UpdateNotified = "";    // the newest version already announced
+        public string LastRunVersion = "";    // the version that ran last (for the "updated to ..." note)
 
         // Folder layout:  <app>\VsLastfmScrobbler.exe, <app>\Data\ (settings, queue, cache, log), <app>\Wraps\, <app>\Source\
         public static string AppDir { get { return AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\'); } }
@@ -128,6 +129,7 @@ namespace ITunesScrobbler
                     else if (k == "VerboseLog") st.VerboseLog = v == "1";
                     else if (k == "CheckUpdates") st.CheckUpdates = v == "1";
                     else if (k == "UpdateNotified") st.UpdateNotified = v;
+                    else if (k == "LastRunVersion") st.LastRunVersion = v;
                 }
             }
             catch (Exception ex) { Log.Write("Settings load failed: " + ex.Message); }
@@ -160,7 +162,8 @@ namespace ITunesScrobbler
                 "LastWrapYear=" + LastWrapYear,
                 "VerboseLog=" + (VerboseLog ? "1" : "0"),
                 "CheckUpdates=" + (CheckUpdates ? "1" : "0"),
-                "UpdateNotified=" + UpdateNotified
+                "UpdateNotified=" + UpdateNotified,
+                "LastRunVersion=" + LastRunVersion
             });
         }
     }
@@ -917,6 +920,23 @@ namespace ITunesScrobbler
 
             Log.Write("Started v" + Program.Version + " (folder: " + Settings.AppDir + ")");
             if (!st.IsConfigured) ShowTab("settings");
+            AnnounceNewVersion();
+        }
+
+        // First start of a new version: one notification with the patch notes (not on a fresh install)
+        void AnnounceNewVersion()
+        {
+            if (st.LastRunVersion == Program.Version) return;
+            bool updated = st.LastRunVersion != "" || st.IsConfigured;   // 4.1 and older didn't save this yet
+            st.LastRunVersion = Program.Version; st.Save();
+            if (!updated) return;
+            string page = Updater.RepoUrl + "/releases/tag/" + Program.Version;
+            Notify(new Toast
+            {
+                Title = "Updated to v" + Program.Version,
+                Body = PatchNotes.Summary + " All notes: tray menu > about.",
+                Url = page, Attribution = "What's new"
+            }.Button("Release notes", page));
         }
 
         // ---- updates from GitHub (see Updater.cs)
@@ -1134,6 +1154,21 @@ namespace ITunesScrobbler
             Log.Write("Exited");
             base.ExitThreadCore();
         }
+    }
+
+    // What's new in this version: shown in the About tab and, once after an update, as a notification.
+    // Update both with every release (lower case, like the rest of the app).
+    static class PatchNotes
+    {
+        public const string Summary = "New: a level meter and progress line in the hover popup, smoother history, LED milestone banners.";
+        public static readonly string[] Lines =
+        {
+            "level meter in the hover popup: green, yellow and red blocks that follow apple music's sound (not other apps)",
+            "progress line in the hover popup, with a mark where the song gets scrobbled; it lights up once it's sent",
+            "new scrobbles slide into the history tab",
+            "milestone notifications show the number on an led display",
+            "this note: after each update the app tells you what's new",
+        };
     }
 
     static class Program
