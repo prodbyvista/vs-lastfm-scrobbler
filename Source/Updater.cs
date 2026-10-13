@@ -1,6 +1,6 @@
 // Updates from GitHub: looks for a newer release of the app, downloads it, puts the new code
 // into Source\ and runs build.bat, which closes the app, builds the new version and starts it.
-// Only Source\, README.txt and Install.bat are replaced: Data\ (settings, queue) and Wraps\ are never touched.
+// Only Source\, README.txt, Install.bat and LICENSE.txt are replaced: Data\ (settings, queue) and Wraps\ are never touched.
 // C# 5 (built-in Windows compiler).
 
 using System;
@@ -85,7 +85,7 @@ namespace ITunesScrobbler
             Directory.CreateDirectory(source);
             foreach (var f in Directory.GetFiles(newSource))
                 File.Copy(f, Path.Combine(source, Path.GetFileName(f)), true);
-            foreach (var name in new[] { "README.txt", "Install.bat" })
+            foreach (var name in new[] { "README.txt", "Install.bat", "LICENSE.txt" })
             {
                 string f = Path.Combine(newRoot, name);
                 if (File.Exists(f)) File.Copy(f, Path.Combine(app, name), true);

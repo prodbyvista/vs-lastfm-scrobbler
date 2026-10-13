@@ -26,3 +26,7 @@ The app checks this repository's releases when it starts (and when you click **c
 ## Building by hand
 
 All the code is in `Source\`. `Source\build.bat` builds `V's Last.fm Scrobbler.exe` into the folder above it, using `csc.exe` from .NET Framework 4.x. The code is written in C# 5 so that compiler can build it. If the build fails, the details are in `Source\build_log.txt`.
+
+## License
+
+[MIT](LICENSE) © 2026 Vista. Use it, change it, share it; just keep the copyright notice.

@@ -137,6 +137,8 @@ It also shows:
                               your Windows account can read them)
   Wraps\                      your wraps; open index.html to see them all
   README.txt                  this file
+  LICENSE.txt                 MIT license: free to use, change and share,
+                              as long as the copyright notice stays
 
 
 ---------------------------------------------------------------------
