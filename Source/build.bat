@@ -43,7 +43,7 @@ if not exist icon.ico (
   echo  WARNING: Source\icon.ico is missing - building without the Last.fm icon.
   set ICONOPT=
 )
-set SOURCES=VsLastfmScrobbler.cs SmtcReader.cs Features.cs Social.cs WrapPage.cs Ui.cs Toast.cs History.cs Friends.cs Stats.cs Updater.cs
+set SOURCES=VsLastfmScrobbler.cs SmtcReader.cs Features.cs Social.cs WrapPage.cs Ui.cs Toast.cs History.cs Friends.cs Stats.cs Updater.cs AudioMeter.cs
 set COMMON=/nologo /target:winexe /platform:anycpu /optimize+ !ICONOPT! /out:"%EXE%" /r:System.dll /r:System.Core.dll /r:Microsoft.CSharp.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Xml.dll /r:System.Security.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll
 
 rem --- what the Windows media controls reader (Apple Music support) needs

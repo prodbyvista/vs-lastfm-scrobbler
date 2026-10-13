@@ -239,7 +239,7 @@ namespace ITunesScrobbler
                 : "You just passed " + N(reached) + " scrobbles on Last.fm.";
             Log.Write("Milestone reached: " + N(reached) + (which != null ? " - " + which : ""));
             string profile = "https://www.last.fm/user/" + Uri.EscapeDataString(st.UserName);
-            var t = new Toast { Title = title, Body = body, Url = profile, Image = cover, Attribution = "Last.fm milestone", DismissButton = true };
+            var t = new Toast { Title = title, Body = body, Url = profile, Image = cover, Hero = ToastSender.MilestoneHero(reached), Attribution = "Last.fm milestone", DismissButton = true };
             notify(t.Button("View on Last.fm", profile));
         }
     }

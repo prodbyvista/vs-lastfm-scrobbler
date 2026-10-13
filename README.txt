@@ -81,7 +81,8 @@ It also shows:
  USING IT
 ---------------------------------------------------------------------
   Everything is in the tray icon:
-    - Rest the mouse on it: what's playing, with the album cover.
+    - Rest the mouse on it: what's playing, with the album cover,
+      a level meter and how far into the song you are.
     - Right-click it: the menu (pause, friends, wraps, history,
       settings, ...).
     - Double-click it: Settings.

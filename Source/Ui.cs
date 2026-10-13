@@ -984,6 +984,8 @@ namespace ITunesScrobbler
         readonly NotifyIcon tray;
         readonly System.Windows.Forms.Timer showDelay = new System.Windows.Forms.Timer { Interval = 450 };
         readonly System.Windows.Forms.Timer watch = new System.Windows.Forms.Timer { Interval = 100 };
+        // level meter + progress line: ~30 frames a second, only while the card is open and a song plays
+        readonly System.Windows.Forms.Timer anim = new System.Windows.Forms.Timer { Interval = 33 };
         readonly Font titleFont = Theme.Mono(9.75f, FontStyle.Bold), textFont = Theme.Mono(9.75f),
                      trackFont = Theme.Mono(10.5f, FontStyle.Bold), smallFont = Theme.Mono(8.75f), letterFont = Theme.Mono(20f, FontStyle.Bold);
         Point lastMove;
@@ -1000,6 +1002,18 @@ namespace ITunesScrobbler
         Rectangle rCover, rLabel, rTrack, rArtist, rAlbum, rStatus;
         const int CoverSz = 64;
         public Func<bool> Suppressed;   // true while the tray menu is open
+        public Func<PlaybackInfo> Progress;   // where the song is (set by the tray app)
+
+        // bottom row: level meter under the cover (2 x 13 blocks, both rows exactly the same size),
+        // progress line with the scrobble mark next to it
+        const int SegW = 4, SegGap = 1, SegH = 4, RowGap = 2, MeterH = SegH * 2 + RowGap, MinBarW = 120;
+        static readonly Color[] SegOn = { Color.FromArgb(70, 255, 142), Color.FromArgb(242, 225, 76), Color.FromArgb(255, 99, 84) };
+        static readonly Color[] SegOff = { Color.FromArgb(15, 42, 26), Color.FromArgb(42, 39, 16), Color.FromArgb(46, 20, 17) };
+        static readonly SolidBrush[] OnBrush = SegOn.Select(c => new SolidBrush(c)).ToArray(), OffBrush = SegOff.Select(c => new SolidBrush(c)).ToArray();
+        Rectangle rMeter, rProgress, rBar;
+        bool showRow, hasProgress;
+        int litL, litR;
+        string progressKey = "";
 
         const int Pad = 10, MaxTextW = 340;
         const string Title = "v's last.fm scrobbler";
@@ -1025,6 +1039,7 @@ namespace ITunesScrobbler
                 if (StillOverIcon() && !IsSuppressed()) ShowCard(); else HideCard();
             };
             watch.Tick += (s, e) => { if (!StillOverIcon() || IsSuppressed()) HideCard(); };
+            anim.Tick += (s, e) => AnimTick();
         }
 
         // never takes focus away from what you're doing
@@ -1051,7 +1066,7 @@ namespace ITunesScrobbler
             status = text; dot = dotColor; isPlayingState = playingState;
             playing = nowPlaying == null ? null : new Track { Artist = nowPlaying.Artist, Name = nowPlaying.Name, Album = nowPlaying.Album, Id = nowPlaying.Id };
             if (playing != null) { playing.Normalize(); Covers.ThumbFor(playing); }   // starts fetching the cover so it's ready on hover
-            if (Visible) { Relayout(); Place(); Invalidate(); }
+            if (Visible) { Relayout(); Place(); Invalidate(); UpdateAnim(); }
         }
 
         // a cover finished downloading (background thread)
@@ -1086,13 +1101,62 @@ namespace ITunesScrobbler
             Relayout();
             Place();
             if (!Visible) Show();
+            UpdateAnim();
         }
 
         public void HideCard()
         {
             showDelay.Stop(); watch.Stop(); armed = false;
+            StopAnim();
             if (Visible) Hide();
         }
+
+        void UpdateAnim()
+        {
+            if (Visible && showRow) { if (!anim.Enabled) anim.Start(); }
+            else StopAnim();
+        }
+
+        void StopAnim()
+        {
+            anim.Stop();
+            AudioMeter.Release();
+            litL = litR = 0;
+        }
+
+        // the progress snapshot, if it belongs to the song on the card and the length is known
+        PlaybackInfo CurrentInfo()
+        {
+            var i = Progress != null ? Progress() : null;
+            return i != null && playing != null && i.TrackId == playing.Id && i.Length > 0 ? i : null;
+        }
+
+        static double PosOf(PlaybackInfo i) { return Math.Max(0, Math.Min(i.Length, i.Pos + (DateTime.UtcNow - i.At).TotalSeconds)); }
+
+        static string Clock(double sec) { int s = (int)Math.Max(0, sec); return (s / 60) + ":" + (s % 60).ToString("00"); }
+
+        void AnimTick()
+        {
+            if (!Visible || !showRow) { StopAnim(); return; }
+
+            // meter: jumps up at once, falls one block per frame (smooth, like an LED meter)
+            float l, r;
+            int nl = 0, nr = 0;
+            if (AudioMeter.Read(out l, out r)) { nl = AudioMeter.Lit(l); nr = AudioMeter.Lit(r); }
+            nl = Math.Max(nl, litL - 1); nr = Math.Max(nr, litR - 1);
+            if (nl != litL || nr != litR) { litL = nl; litR = nr; Invalidate(rMeter); }
+
+            // progress: the line appears once the length is known; repaint only when a pixel or the text changes
+            var info = CurrentInfo();
+            if ((info != null) != hasProgress) { Relayout(); Place(); Invalidate(); return; }
+            if (info != null)
+            {
+                string key = BarFill(info) + "|" + info.Scrobbled + "|" + info.ScrobbleAt + "|" + info.Note;
+                if (key != progressKey) { progressKey = key; Invalidate(rProgress); }
+            }
+        }
+
+        int BarFill(PlaybackInfo info) { return (int)Math.Round(rBar.Width * PosOf(info) / info.Length); }
 
         int DotSize { get { return Math.Max(6, textFont.Height / 2); } }
 
@@ -1133,7 +1197,27 @@ namespace ITunesScrobbler
                     Math.Max(Theme.TightWidth(playing.Artist, textFont), Theme.TightWidth(playing.Album, smallFont)))));
                 right = Math.Max(right, textRight);
                 y = Math.Max(rCover.Bottom, ty) + 4;
+
+                // bottom row (only while it's playing): meter under the cover, progress line beside it
+                showRow = isPlayingState;
+                var info = showRow ? CurrentInfo() : null;
+                hasProgress = info != null;
+                rProgress = Rectangle.Empty;
+                if (showRow)
+                {
+                    y += 6;
+                    int lineH = labelH;
+                    rMeter = new Rectangle(Pad + 1, y + Math.Max(0, (lineH - MeterH) / 2), CoverSz, MeterH);
+                    if (hasProgress)
+                    {
+                        right = Math.Max(right, tx + MinBarW + 10 + Theme.TightWidth(Clock(info.Length), smallFont));
+                        rProgress = new Rectangle(tx, y, 0, lineH * 2 + 2);   // width once the card's width is known
+                        y += lineH * 2 + 2 + 4;
+                    }
+                    else y += Math.Max(lineH, MeterH) + 4;
+                }
             }
+            else { showRow = false; hasProgress = false; rProgress = Rectangle.Empty; }
 
             // the status line: always when nothing plays, otherwise only when something's off (paused, offline...)
             showStatus = playing == null || !isPlayingState;
@@ -1146,6 +1230,15 @@ namespace ITunesScrobbler
                 right = Math.Max(right, rStatus.X + (single ? Theme.TightWidth(status, textFont) : ss.Width));
                 y = rStatus.Bottom + 4;
             }
+            if (hasProgress)
+            {
+                // the bar: the space left of the length text, centred on the first line
+                rProgress.Width = right - rProgress.X;
+                var pi = CurrentInfo();
+                int lenW = pi != null ? Theme.TightWidth(Clock(pi.Length), smallFont) : 0;
+                rBar = new Rectangle(rProgress.X, rProgress.Y + One("Ag", smallFont).Height / 2 - 1, Math.Max(10, rProgress.Width - lenW - 10), 3);
+            }
+            progressKey = "";
             Size = new Size(right + Pad + 1, y + Pad - 2);
             // a drawing box may stick out past the right margin by its overhang allowance: harmless, the card clips it
         }
@@ -1170,6 +1263,8 @@ namespace ITunesScrobbler
         {
             var g = e.Graphics;
             g.Clear(Theme.Bg);
+            // a meter / progress frame only repaints the bottom row: skip the rest
+            if (showRow && e.ClipRectangle.Top > rCover.Bottom && !showStatus) { PaintRow(g); return; }
             using (var p = new Pen(Theme.Line)) g.DrawRectangle(p, 0, 0, Width - 1, Height - 1);
             using (var p = new Pen(Theme.Dim)) g.DrawLine(p, 1, 1, Width - 2, 1);   // a brighter top edge, like a lit panel
             var flags = TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
@@ -1200,6 +1295,7 @@ namespace ITunesScrobbler
                 TextRenderer.DrawText(g, playing.Name, trackFont, rTrack, Theme.Hi, flags | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
                 TextRenderer.DrawText(g, playing.Artist, textFont, rArtist, Theme.Text, one);
                 if (!rAlbum.IsEmpty) TextRenderer.DrawText(g, playing.Album, smallFont, rAlbum, Theme.Dim, one);
+                if (showRow) PaintRow(g);
             }
 
             if (showStatus)
@@ -1207,6 +1303,43 @@ namespace ITunesScrobbler
                 if (dot != Color.Empty) DrawDot(g, Pad + 1, rStatus.Y, textFont.Height);
                 TextRenderer.DrawText(g, status, textFont, new Rectangle(rStatus.X, rStatus.Y, rStatus.Width, rStatus.Height + 4), Theme.Text, flags | TextFormatFlags.WordBreak);
             }
+        }
+
+        void PaintRow(Graphics g)
+        {
+            // level meter: whole pixels only, so both rows come out exactly the same height
+            for (int row = 0; row < 2; row++)
+            {
+                int lit = row == 0 ? litL : litR, yy = rMeter.Y + row * (SegH + RowGap);
+                for (int i = 0; i < AudioMeter.Segments; i++)
+                {
+                    int zone = i < 9 ? 0 : i < 11 ? 1 : 2;
+                    g.FillRectangle(i < lit ? OnBrush[zone] : OffBrush[zone], rMeter.X + i * (SegW + SegGap), yy, SegW, SegH);
+                }
+            }
+
+            var info = hasProgress ? CurrentInfo() : null;
+            if (info == null) return;
+            var flags = TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine;
+            int lineH = One("Ag", smallFont).Height;
+            var bar = rBar;
+            using (var b = new SolidBrush(Theme.Line)) g.FillRectangle(b, bar);
+            int fill = BarFill(info);
+            if (fill > 0) using (var b = new SolidBrush(Theme.Text)) g.FillRectangle(b, bar.X, bar.Y, fill, bar.Height);
+            if (info.ScrobbleAt >= 0 && info.ScrobbleAt <= info.Length)
+            {
+                int mx = bar.X + (int)Math.Round(bar.Width * info.ScrobbleAt / info.Length) - 1;
+                using (var b = new SolidBrush(info.Scrobbled ? Theme.Hi : Theme.Dim)) g.FillRectangle(b, mx, bar.Y - 4, 3, bar.Height + 8);
+            }
+            string len = Clock(info.Length);
+            TextRenderer.DrawText(g, len, smallFont, new Point(rProgress.Right - Theme.TightWidth(len, smallFont), rProgress.Y), Theme.Dim, flags);
+
+            string note; Color c;
+            if (info.Scrobbled) { note = "\u2713 scrobbled"; c = Theme.Hi; }
+            else if (info.ScrobbleAt > info.Length) { note = "not enough left to scrobble"; c = Theme.Dim; }
+            else if (info.ScrobbleAt >= 0) { note = "scrobbles at " + Clock(info.ScrobbleAt); c = Theme.Dim; }
+            else { note = info.Note; c = Theme.Dim; }
+            TextRenderer.DrawText(g, note, smallFont, new Rectangle(rProgress.X, rProgress.Y + lineH + 2, rProgress.Width, lineH), c, flags | TextFormatFlags.EndEllipsis);
         }
 
         void DrawDot(Graphics g, int x, int lineY, int lineH)
@@ -1251,7 +1384,7 @@ namespace ITunesScrobbler
             if (disposing)
             {
                 Covers.Ready -= CoverArrived;
-                showDelay.Dispose(); watch.Dispose();
+                showDelay.Dispose(); watch.Dispose(); anim.Dispose();
                 foreach (var f in new[] { titleFont, textFont, trackFont, smallFont, letterFont }) f.Dispose();
             }
             base.Dispose(disposing);

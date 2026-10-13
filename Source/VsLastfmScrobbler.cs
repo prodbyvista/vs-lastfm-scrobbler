@@ -22,7 +22,7 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("Scrobbles Apple Music and iTunes to Last.fm")]
 [assembly: System.Reflection.AssemblyCompany("V")]
 [assembly: System.Reflection.AssemblyCopyright("V, 2026")]
-[assembly: System.Reflection.AssemblyVersion("4.1.0.0")]
+[assembly: System.Reflection.AssemblyVersion("4.2.0.0")]
 
 namespace ITunesScrobbler
 {
@@ -576,6 +576,18 @@ namespace ITunesScrobbler
     }
 
     // ---------------------------------------------------------------- scrobble logic
+    // Where the current song is, for the hover popup's progress line (a snapshot, replaced every poll)
+    class PlaybackInfo
+    {
+        public string TrackId;
+        public double Pos;            // seconds into the song when the poll ran
+        public DateTime At;           // when that was (UTC)
+        public int Length;            // song length in seconds (0 = unknown)
+        public double ScrobbleAt = -1;   // where in the song it gets scrobbled (-1 = it won't)
+        public bool Scrobbled;
+        public string Note = "";      // instead of a scrobble mark: "scrobbling paused" etc.
+    }
+
     class Engine
     {
         readonly Func<Settings> settings;
@@ -588,6 +600,8 @@ namespace ITunesScrobbler
         public readonly MonthlyWrap Wraps;
         Track playingNow;                       // what's playing right now (null when paused/stopped)
         public Track NowPlaying { get { return playingNow; } }
+        public PlaybackInfo Progress;           // null when nothing plays
+        double scrobbleAt = -1;
 
         Track current;
         long startedUnix;
@@ -650,6 +664,7 @@ namespace ITunesScrobbler
             if (!ok || t == null || state != ITunesReader.StatePlaying)
             {
                 playingNow = null;
+                Progress = null;
                 Discord.Update(st, null, false, 0);
                 if (!ok)
                 {
@@ -674,6 +689,7 @@ namespace ITunesScrobbler
                 playedSeconds = 0;
                 scrobbled = false;
                 nowPlayingSent = false;
+                scrobbleAt = -1;
             }
             else
             {
@@ -688,7 +704,7 @@ namespace ITunesScrobbler
             status(prefix + "Playing: " + current + Queued());
             Diag.Once("src:" + ITunesReader.Source, "Reading playback via " + ITunesReader.Source);
 
-            if (st.Paused || !st.IsConfigured) return;
+            if (st.Paused || !st.IsConfigured) { SetProgress(st, pos); return; }
 
             if (!nowPlayingSent)
             {
@@ -705,6 +721,24 @@ namespace ITunesScrobbler
                 Queue.Add(new Pending { Track = current, Timestamp = startedUnix });   // saved to disk first, then sent
                 if (current.Duration > 0) Durations.Set(current.Artist, current.Name, current.Duration);
             }
+            SetProgress(st, pos);
+        }
+
+        // the popup's progress line: where we are, and where in the song the scrobble happens
+        // (Last.fm counts time listened, so after a skip the mark moves with it)
+        void SetProgress(Settings st, int pos)
+        {
+            var p = new PlaybackInfo { TrackId = current.Id, Pos = pos, At = DateTime.UtcNow, Length = current.Duration, Scrobbled = scrobbled };
+            double need = Threshold(current);
+            if (st.Paused) p.Note = "scrobbling paused";
+            else if (!st.IsConfigured) p.Note = "not connected to last.fm";
+            else if (need == double.MaxValue) p.Note = "too short to scrobble";
+            else
+            {
+                if (!scrobbled || scrobbleAt < 0) scrobbleAt = scrobbled ? pos : pos + Math.Max(0, need - playedSeconds);
+                p.ScrobbleAt = scrobbleAt;
+            }
+            Progress = p;
         }
 
         void ResetCurrent() { current = null; lastPos = -1; }
@@ -866,7 +900,7 @@ namespace ITunesScrobbler
             tray.Text = "";   // no grey Windows tooltip: the themed hover card shows instead
             tray.ContextMenuStrip = menu;
             tray.Visible = true;
-            hover = new TrayHoverCard(tray) { Suppressed = () => menu.Visible };
+            hover = new TrayHoverCard(tray) { Suppressed = () => menu.Visible, Progress = () => engine != null ? engine.Progress : null };
             tray.DoubleClick += (s, e) => ShowTab("settings");
             tray.BalloonTipClicked += (s, e) => { if (!string.IsNullOrEmpty(clickUrl)) SettingsForm.OpenUrl(clickUrl); };
             noteTimer.Tick += (s, e) => ShowNextNote();
@@ -1104,7 +1138,7 @@ namespace ITunesScrobbler
 
     static class Program
     {
-        public const string Version = "4.1";
+        public const string Version = "4.2";
 
         [STAThread]
         static void Main()

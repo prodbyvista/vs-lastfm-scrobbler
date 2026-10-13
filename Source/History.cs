@@ -381,7 +381,7 @@ namespace ITunesScrobbler
             list.Refill();
         }
 
-        public override void TabShown() { list.Refill(); }
+        public override void TabShown() { list.ForgetSeen(); list.Refill(); }
 
         internal string Filter { get { return filter; } }
         internal void SetSummary(string s) { summary.Text = s; }
@@ -396,6 +396,15 @@ namespace ITunesScrobbler
             readonly int RowH, HeadH, ThumbSz;
             readonly Font letterFont;
 
+            // a new scrobble slides in at the top and glows for a moment. Runs ~1.7 s at ~60 fps,
+            // only while this tab is on screen; nothing runs the rest of the time.
+            const double SlideMs = 280, FadeMs = 1400;
+            HashSet<string> knownKeys;              // what the list showed last time (null before the first fill)
+            HistoryEntry animRow;
+            int animY;
+            DateTime animStart;
+            readonly System.Windows.Forms.Timer animTimer = new System.Windows.Forms.Timer { Interval = 15 };
+
             public HistoryList(HistoryForm f)
             {
                 form = f;
@@ -405,6 +414,41 @@ namespace ITunesScrobbler
                 RowH = Math.Max(36, textH + 18);   // room for a cover thumbnail
                 ThumbSz = RowH - 8;
                 letterFont = Theme.Mono(Math.Max(8f, Font.Size - 1f), FontStyle.Bold);
+                animTimer.Tick += (s, e) => AnimTick();
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing) animTimer.Dispose();
+                base.Dispose(disposing);
+            }
+
+            double Elapsed { get { return (DateTime.UtcNow - animStart).TotalMilliseconds; } }
+
+            // 0 -> 1, fast at first and settling softly (ease-out cubic)
+            static double Ease(double t) { t = Math.Max(0, Math.Min(1, t)); return 1 - Math.Pow(1 - t, 3); }
+
+            int SlideOffset { get { return animRow == null ? 0 : (int)Math.Round(RowH * (1 - Ease(Elapsed / SlideMs))); } }
+            double Glow { get { return animRow == null ? 0 : 1 - Math.Max(0, Math.Min(1, (Elapsed - SlideMs) / FadeMs)); } }
+
+            void AnimTick()
+            {
+                if (animRow == null || !Visible) { StopAnim(); return; }
+                double t = Elapsed;
+                if (t >= SlideMs + FadeMs) { StopAnim(); Invalidate(new Rectangle(0, animY, Width, RowH)); return; }
+                // while sliding the rows below move too; after that only the new row changes colour
+                if (t < SlideMs + 20) Invalidate(new Rectangle(0, animY, Width, Math.Max(RowH, Height - animY)));
+                else Invalidate(new Rectangle(0, animY, Width, RowH));
+            }
+
+            void StopAnim() { animTimer.Stop(); animRow = null; }
+
+            // opening the tab shows the list as it is, without animating what came in while it was hidden
+            public void ForgetSeen() { knownKeys = null; StopAnim(); }
+
+            static Color Mix(Color a, Color b, double k)
+            {
+                return Color.FromArgb((int)(a.R + (b.R - a.R) * k), (int)(a.G + (b.G - a.G) * k), (int)(a.B + (b.B - a.B) * k));
             }
 
             public void Refill()
@@ -427,24 +471,69 @@ namespace ITunesScrobbler
                 }
                 if (rows.Count == 0) rows.Add("nothing here yet");
                 Height = rows.Sum(r => r is string ? HeadH : RowH) + 8;
+
+                // a scrobble that wasn't there before, at the very top, while you're looking: animate it
+                var keys = new HashSet<string>(all.Select(e => e.Key));
+                var top = rows.OfType<HistoryEntry>().FirstOrDefault();
+                if (knownKeys != null && top != null && !knownKeys.Contains(top.Key) && Visible)
+                {
+                    animRow = top;
+                    animStart = DateTime.UtcNow;
+                    animTimer.Start();
+                }
+                else if (animRow != null)
+                {
+                    // the list was rebuilt mid-animation (e.g. queued -> sent): keep going on the new copy of the row
+                    string k = animRow.Key;
+                    animRow = rows.OfType<HistoryEntry>().FirstOrDefault(x => x.Key == k);
+                    if (animRow == null) StopAnim();
+                }
+                if (animRow != null)
+                {
+                    animY = 0;
+                    foreach (var r in rows) { if (r == (object)animRow) break; animY += r is string ? HeadH : RowH; }
+                }
+                knownKeys = keys;
                 Invalidate();
             }
 
             protected override void OnPaint(PaintEventArgs pe)
             {
                 var g = pe.Graphics;
-                int y = 0, w = Width;
+                int y = 0, w = Width, off = SlideOffset, shift = 0;
+                double glow = Glow;
+                var clip = pe.ClipRectangle;
                 var flags = TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine;
                 using (var sep = new Pen(Color.FromArgb(16, 36, 26)))
                 foreach (var r in rows)
                 {
-                    var head = r as string;
-                    if (head != null)
+                    int h = r is string ? HeadH : RowH;
+                    if (r == (object)animRow && off > 0)
                     {
-                        TextRenderer.DrawText(g, Theme.Rule(head, Font, w - 8), Font, new Rectangle(0, y, w, HeadH), Theme.Hi, flags);
-                        y += HeadH; continue;
+                        // the gap opens from the top; the new row slides down into it
+                        var state = g.Save();
+                        g.SetClip(new Rectangle(0, y, w, RowH - off), CombineMode.Intersect);
+                        PaintRow(g, (HistoryEntry)r, y - off, w, flags, sep, glow);
+                        g.Restore(state);
+                        shift = off;   // the rows below are still on their way down
+                        y += h; continue;
                     }
-                    var e = (HistoryEntry)r;
+                    int dy = y - shift;
+                    if (dy > clip.Bottom) break;
+                    if (dy + h >= clip.Top)
+                    {
+                        var head = r as string;
+                        if (head != null) TextRenderer.DrawText(g, Theme.Rule(head, Font, w - 8), Font, new Rectangle(0, dy, w, HeadH), Theme.Hi, flags);
+                        else PaintRow(g, (HistoryEntry)r, dy, w, flags, sep, r == (object)animRow ? glow : 0);
+                    }
+                    y += h;
+                }
+            }
+
+            void PaintRow(Graphics g, HistoryEntry e, int y, int w, TextFormatFlags flags, Pen sep, double glow)
+            {
+                {
+                    if (glow > 0) using (var b = new SolidBrush(Mix(Theme.Bg, Color.FromArgb(30, 74, 48), glow))) g.FillRectangle(b, 0, y, w, RowH);
                     if (e.Status == "refused") using (var b = new SolidBrush(Color.FromArgb(26, 13, 11))) g.FillRectangle(b, 0, y, w, RowH);
                     string tag = e.Status == "sent" ? "[SENT]" : e.Status == "queued" ? "[QUEUED]" : "[REFUSED]";
                     Color tagColor = e.Status == "sent" ? Theme.Hi : e.Status == "queued" ? Theme.Warn : Theme.Bad;
@@ -460,11 +549,12 @@ namespace ITunesScrobbler
                     }
                     int textX = timeW + ThumbSz + 12;
                     string text = e.Artist + " - " + e.Track + (e.Status == "refused" && e.Reason != "" ? "  · " + e.Reason : "");
-                    TextRenderer.DrawText(g, text, Font, new Rectangle(textX, y, w - textX - tagW - 8, RowH), e.Status == "refused" ? Theme.Bad : Color.FromArgb(220, 247, 228),
+                    var textColor = e.Status == "refused" ? Theme.Bad : Color.FromArgb(220, 247, 228);
+                    if (glow > 0 && e.Status != "refused") textColor = Mix(textColor, Theme.Hi, glow);
+                    TextRenderer.DrawText(g, text, Font, new Rectangle(textX, y, w - textX - tagW - 8, RowH), textColor,
                         flags | TextFormatFlags.EndEllipsis);
                     TextRenderer.DrawText(g, tag, Font, new Rectangle(w - tagW, y, tagW, RowH), tagColor, flags);
                     g.DrawLine(sep, 0, y + RowH - 1, w, y + RowH - 1);
-                    y += RowH;
                 }
             }
 
