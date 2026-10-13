@@ -1,0 +1,5 @@
+# made on your PC, not part of the code
+*.exe
+Source/build_log.txt
+Data/
+Wraps/
