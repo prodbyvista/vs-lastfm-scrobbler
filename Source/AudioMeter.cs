@@ -140,6 +140,7 @@ namespace ITunesScrobbler
                     && ((IAudioSessionManager2)mgrObj).GetSessionEnumerator(out sessions) == 0 && sessions != null)
                 {
                     object best = null; bool bestActive = false;
+                    var seen = new System.Collections.Generic.List<string>();
                     int count;
                     sessions.GetCount(out count);
                     for (int i = 0; i < count; i++)
@@ -151,7 +152,26 @@ namespace ITunesScrobbler
                         {
                             var c2 = (IAudioSessionControl2)s;
                             uint pid; int state;
-                            if (c2.GetProcessId(out pid) == 0 && pid != 0 && IsPlayer(pid))
+                            // Store apps (like Apple Music) can return "more than one process" here: a success
+                            // code that isn't 0, with the first process's id. So anything >= 0 counts.
+                            int hr = c2.GetProcessId(out pid);
+                            string name = hr >= 0 && pid != 0 ? ProcessName(pid) : "";
+                            bool match = IsPlayerName(name);
+                            if (!match)
+                            {
+                                // the session id names the program too (path or app package)
+                                IntPtr idp;
+                                if (c2.GetSessionIdentifier(out idp) >= 0 && idp != IntPtr.Zero)
+                                {
+                                    string id = Marshal.PtrToStringUni(idp) ?? "";
+                                    Marshal.FreeCoTaskMem(idp);
+                                    string low = id.ToLowerInvariant();
+                                    match = low.Contains("applemusic") || low.Contains("itunes");
+                                    if (name == "") name = id.Length > 60 ? "..." + id.Substring(id.Length - 60) : id;
+                                }
+                            }
+                            seen.Add(name == "" ? "?" : name);
+                            if (match)
                             {
                                 c2.GetState(out state);
                                 bool active = state == SessionActive;
@@ -169,6 +189,7 @@ namespace ITunesScrobbler
                         Diag.Once("meter-session", "Level meter: reading the player's own sound");
                         return;
                     }
+                    Diag.Once("meter-sessions", "Level meter: sound sessions on this output: " + (seen.Count > 0 ? string.Join(", ", seen) : "(none)"));
                 }
 
                 // the player's session isn't there (yet): show the whole output meanwhile
@@ -195,14 +216,15 @@ namespace ITunesScrobbler
             }
         }
 
-        static bool IsPlayer(uint pid)
+        static string ProcessName(uint pid)
         {
-            try
-            {
-                using (var p = Process.GetProcessById((int)pid))
-                    foreach (var name in Players) if (string.Equals(p.ProcessName, name, StringComparison.OrdinalIgnoreCase)) return true;
-            }
-            catch { }
+            try { using (var p = Process.GetProcessById((int)pid)) return p.ProcessName; }
+            catch { return ""; }
+        }
+
+        static bool IsPlayerName(string name)
+        {
+            foreach (var p in Players) if (string.Equals(name, p, StringComparison.OrdinalIgnoreCase)) return true;
             return false;
         }
 
